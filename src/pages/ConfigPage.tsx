@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   Settings,
@@ -13,13 +13,20 @@ import {
   Plus,
   Trash2,
   AlertTriangle,
+  Eye,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import { useGameStore } from '../store/useGameStore';
 import { PageContainer } from '../components/PageContainer';
 import { Modal } from '../components/Modal';
 import { StatBar } from '../components/StatBar';
 import type { Rarity, MissionType, GameConfig } from '../types';
-import { DEFAULT_CONFIG } from '../data/defaultConfig';
+import { DEFAULT_CONFIG, MISSIONS } from '../data/defaultConfig';
+import { calculateAdaptability } from '../utils/helpers';
 
 type TabType = 'rarities' | 'sets' | 'overload' | 'repair' | 'missions' | 'recycling';
 
@@ -42,12 +49,13 @@ const MISSION_TYPE_NAMES: Record<MissionType, string> = {
 const RARITY_ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
 
 export function ConfigPage() {
-  const { config, updateConfig, resetConfig } = useGameStore();
+  const { config, robots, updateConfig, resetConfig } = useGameStore();
   const [activeTab, setActiveTab] = useState<TabType>('rarities');
   const [editedConfig, setEditedConfig] = useState<GameConfig>(config);
   const [hasChanges, setHasChanges] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showSaveSuccess, setShowSaveSuccess] = useState(false);
+  const [showPreviewPanel, setShowPreviewPanel] = useState(true);
 
   const handleConfigChange = <K extends keyof GameConfig>(
     key: K,
@@ -69,6 +77,255 @@ export function ConfigPage() {
     resetConfig();
     setHasChanges(false);
     setShowResetConfirm(false);
+  };
+
+  const previewData = useMemo(() => {
+    const rarityProbSum = Object.values(editedConfig.rarities).reduce(
+      (sum, r) => sum + r.probability,
+      0
+    );
+    const rarityProbValid = Math.abs(rarityProbSum - 1) < 0.01;
+
+    const originalOverloaded = robots.filter(
+      (r) => r.totalEnergy > config.overloadRules.threshold
+    ).length;
+    const newOverloaded = robots.filter(
+      (r) => r.totalEnergy > editedConfig.overloadRules.threshold
+    ).length;
+    const overloadChange = newOverloaded - originalOverloaded;
+
+    const repairLadder = {
+      original: Array.from({ length: config.repairRules.maxRepairs }).map((_, i) =>
+        Math.max(
+          0.1,
+          config.repairRules.baseSuccessRate - i * config.repairRules.degradeRate
+        )
+      ),
+      edited: Array.from({ length: editedConfig.repairRules.maxRepairs }).map((_, i) =>
+        Math.max(
+          0.1,
+          editedConfig.repairRules.baseSuccessRate -
+            i * editedConfig.repairRules.degradeRate
+        )
+      ),
+    };
+
+    const sampleRobots = robots.slice(0, 3);
+    const sampleMissions = MISSIONS.slice(0, 3);
+    const adaptabilityChanges = sampleRobots.map((robot) => ({
+      robotId: robot.id,
+      robotName: robot.name,
+      missions: sampleMissions.map((mission) => {
+        const originalScore = calculateAdaptability(robot, mission, config);
+        const newScore = calculateAdaptability(robot, mission, editedConfig);
+        return {
+          missionId: mission.id,
+          missionName: mission.name,
+          originalScore,
+          newScore,
+          change: newScore - originalScore,
+        };
+      }),
+    }));
+
+    return {
+      rarityProbSum,
+      rarityProbValid,
+      originalOverloaded,
+      newOverloaded,
+      overloadChange,
+      repairLadder,
+      adaptabilityChanges,
+      totalRobots: robots.length,
+    };
+  }, [editedConfig, config, robots]);
+
+  const renderImpactPreviewPanel = () => {
+    if (!showPreviewPanel) return null;
+
+    const {
+      rarityProbSum,
+      rarityProbValid,
+      originalOverloaded,
+      newOverloaded,
+      overloadChange,
+      repairLadder,
+      adaptabilityChanges,
+      totalRobots,
+    } = previewData;
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, height: 0 }}
+        animate={{ opacity: 1, height: 'auto' }}
+        exit={{ opacity: 0, height: 0 }}
+        className="col-span-full mt-4"
+      >
+        <div className="card p-5 border-neon-blue/30">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Eye className="w-5 h-5 text-neon-blue" />
+              <h3 className="font-display font-bold text-white">影响预览</h3>
+              {!hasChanges && (
+                <span className="text-xs text-white/40 ml-2">（修改配置后实时更新）</span>
+              )}
+            </div>
+            <button
+              onClick={() => setShowPreviewPanel(false)}
+              className="text-white/40 hover:text-white/70 text-xs"
+            >
+              收起
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-background-tertiary rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Gem className="w-4 h-4 text-neon-orange" />
+                <span className="text-sm text-white/70">稀有度概率</span>
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                {rarityProbValid ? (
+                  <CheckCircle2 className="w-5 h-5 text-neon-green" />
+                ) : (
+                  <XCircle className="w-5 h-5 text-neon-red" />
+                )}
+                <span
+                  className={`text-2xl font-bold font-mono ${
+                    rarityProbValid ? 'text-neon-green' : 'text-neon-red'
+                  }`}
+                >
+                  {(rarityProbSum * 100).toFixed(1)}%
+                </span>
+              </div>
+              <p className="text-xs text-white/50">
+                {rarityProbValid ? '概率总和合法' : `概率总和应为 100%，当前偏差 ${((rarityProbSum - 1) * 100).toFixed(1)}%`}
+              </p>
+            </div>
+
+            <div className="bg-background-tertiary rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Zap className="w-4 h-4 text-neon-red" />
+                <span className="text-sm text-white/70">超载机器人</span>
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-2xl font-bold font-mono text-white">
+                  {newOverloaded}
+                  <span className="text-sm text-white/40">/{totalRobots}</span>
+                </span>
+                {overloadChange !== 0 && (
+                  <div
+                    className={`flex items-center gap-1 text-sm ${
+                      overloadChange > 0 ? 'text-neon-red' : 'text-neon-green'
+                    }`}
+                  >
+                    {overloadChange > 0 ? (
+                      <TrendingUp className="w-4 h-4" />
+                    ) : (
+                      <TrendingDown className="w-4 h-4" />
+                    )}
+                    <span>{overloadChange > 0 ? '+' : ''}{overloadChange}</span>
+                  </div>
+                )}
+                {overloadChange === 0 && <Minus className="w-4 h-4 text-white/40" />}
+              </div>
+              <p className="text-xs text-white/50">
+                当前 {originalOverloaded} 台超载，修改后 {newOverloaded} 台
+                {overloadChange > 0 && `，新增 ${overloadChange} 台超载`}
+                {overloadChange < 0 && `，减少 ${Math.abs(overloadChange)} 台超载`}
+              </p>
+            </div>
+
+            <div className="bg-background-tertiary rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Wrench className="w-4 h-4 text-neon-green" />
+                <span className="text-sm text-white/70">维修成功率阶梯</span>
+              </div>
+              <div className="space-y-1.5">
+                {repairLadder.edited.slice(0, 3).map((rate, i) => {
+                  const origRate = repairLadder.original[i] ?? rate;
+                  const diff = rate - origRate;
+                  return (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-white/50 w-12">第{i + 1}次</span>
+                      <div className="flex-1 mx-2 h-1.5 bg-background rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${rate * 100}%`,
+                            backgroundColor:
+                              rate >= 0.7 ? '#10b981' : rate >= 0.4 ? '#f59e0b' : '#ef4444',
+                          }}
+                        />
+                      </div>
+                      <span
+                        className={`font-mono w-10 text-right ${
+                          rate >= 0.7
+                            ? 'text-neon-green'
+                            : rate >= 0.4
+                            ? 'text-neon-orange'
+                            : 'text-neon-red'
+                        }`}
+                      >
+                        {Math.round(rate * 100)}%
+                      </span>
+                      {diff !== 0 && (
+                        <span
+                          className={`w-10 text-right font-mono ${
+                            diff > 0 ? 'text-neon-green' : 'text-neon-red'
+                          }`}
+                        >
+                          {diff > 0 ? '+' : ''}
+                          {Math.round(diff * 100)}%
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {repairLadder.edited.length > 3 && (
+                <p className="text-xs text-white/40 mt-2">共 {repairLadder.edited.length} 次维修</p>
+              )}
+            </div>
+
+            <div className="bg-background-tertiary rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Target className="w-4 h-4 text-neon-blue" />
+                <span className="text-sm text-white/70">任务适配度样例</span>
+              </div>
+              {adaptabilityChanges.length > 0 ? (
+                <div className="space-y-2">
+                  {adaptabilityChanges[0].missions.slice(0, 2).map((m) => (
+                    <div key={m.missionId} className="flex items-center justify-between text-xs">
+                      <span className="text-white/50 truncate flex-1">{m.missionName}</span>
+                      <span className="font-mono text-white mx-2">{m.originalScore}→{m.newScore}</span>
+                      {m.change !== 0 && (
+                        <span
+                          className={`font-mono w-8 text-right ${
+                            m.change > 0 ? 'text-neon-green' : 'text-neon-red'
+                          }`}
+                        >
+                          {m.change > 0 ? '+' : ''}
+                          {m.change}
+                        </span>
+                      )}
+                      {m.change === 0 && <span className="text-white/30 w-8 text-right">-</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-white/40">暂无机器人数据</p>
+              )}
+              {adaptabilityChanges.length > 0 && (
+                <p className="text-xs text-white/40 mt-2">
+                  基于 {adaptabilityChanges.length} 台机器人 × {adaptabilityChanges[0].missions.length} 个任务
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    );
   };
 
   const InputField = ({
@@ -857,6 +1114,17 @@ export function ConfigPage() {
             <span className="text-neon-orange text-sm">有未保存的更改</span>
           )}
           <button
+            onClick={() => setShowPreviewPanel(!showPreviewPanel)}
+            className={`flex items-center gap-2 text-sm py-2 px-4 rounded-xl transition-all border ${
+              showPreviewPanel
+                ? 'bg-neon-blue/20 border-neon-blue/50 text-neon-blue'
+                : 'btn-secondary'
+            }`}
+          >
+            <Eye className="w-4 h-4" />
+            {showPreviewPanel ? '隐藏预览' : '影响预览'}
+          </button>
+          <button
             onClick={() => setShowResetConfirm(true)}
             className="btn-secondary flex items-center gap-2 text-sm py-2 px-4"
           >
@@ -865,12 +1133,13 @@ export function ConfigPage() {
           </button>
           <button
             onClick={handleSave}
-            disabled={!hasChanges}
+            disabled={!hasChanges || !previewData.rarityProbValid}
             className={`flex items-center gap-2 text-sm py-2 px-6 rounded-xl font-bold transition-all ${
-              hasChanges
+              hasChanges && previewData.rarityProbValid
                 ? 'bg-gradient-to-r from-neon-blue to-neon-purple text-white hover:shadow-lg hover:shadow-neon-blue/20'
                 : 'bg-background-tertiary text-white/30 cursor-not-allowed'
             }`}
+            title={!previewData.rarityProbValid ? '稀有度概率总和不合法，无法保存' : hasChanges ? '保存配置' : '没有更改需要保存'}
           >
             <Save className="w-4 h-4" />
             保存配置
@@ -878,7 +1147,9 @@ export function ConfigPage() {
         </div>
       }
     >
-      <div className="flex gap-6">
+      {renderImpactPreviewPanel()}
+
+      <div className="flex gap-6 mt-4">
         <div className="w-56 flex-shrink-0">
           <div className="space-y-1 sticky top-24">
             {TAB_CONFIG.map((tab) => {
